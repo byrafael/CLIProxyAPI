@@ -371,6 +371,12 @@ type RoutingConfig struct {
 	// When false, subagents are distributed across the credential pool via the fallback selector.
 	// Default: true. Ignored when SessionAffinity is false.
 	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
+
+	// QuotaRecheckInterval sets how often Codex credentials in a quota cooldown are checked
+	// against the upstream usage endpoint. A credential whose usage window has been reset
+	// upstream leaves cooldown early instead of waiting for the stored end time.
+	// Accepts duration strings like "10m". Empty or non-positive disables the recheck.
+	QuotaRecheckInterval string `yaml:"quota-recheck-interval,omitempty" json:"quota-recheck-interval,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.
