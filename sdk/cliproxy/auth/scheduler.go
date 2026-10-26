@@ -22,6 +22,7 @@ const (
 	schedulerStrategyRoundRobin         schedulerStrategy = 1
 	schedulerStrategyFillFirst          schedulerStrategy = 2
 	schedulerStrategyWeightedRoundRobin schedulerStrategy = 3
+	schedulerStrategyEarliestResetFirst schedulerStrategy = 4
 )
 
 // scheduledState describes how an auth currently participates in a model shard.
@@ -170,6 +171,8 @@ func selectorStrategy(selector Selector) schedulerStrategy {
 		return schedulerStrategyFillFirst
 	case *WeightedRoundRobinSelector:
 		return schedulerStrategyWeightedRoundRobin
+	case *EarliestResetFirstSelector:
+		return schedulerStrategyEarliestResetFirst
 	case nil, *RoundRobinSelector:
 		return schedulerStrategyRoundRobin
 	default:
@@ -515,6 +518,33 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 	}
 	if !hasCandidate {
 		return nil, "", s.mixedUnavailableErrorLocked(normalized, model, predicate)
+	}
+
+	if strategy == schedulerStrategyEarliestResetFirst {
+		var best *scheduledAuth
+		var bestReset time.Time
+		for _, shard := range candidateShards {
+			if shard == nil {
+				continue
+			}
+			bucket := shard.readyByPriority[bestPriority]
+			if bucket == nil {
+				continue
+			}
+			for _, entry := range bucket.all.flat {
+				if !predicate(entry) {
+					continue
+				}
+				reset := weeklyQuotaReset(entry.auth, now)
+				if !reset.IsZero() && (best == nil || reset.Before(bestReset) || (reset.Equal(bestReset) && entry.auth.ID < best.auth.ID)) {
+					best, bestReset = entry, reset
+				}
+			}
+		}
+		if best != nil {
+			return best.auth, best.meta.providerKey, nil
+		}
+		// No current weekly reset is known; use the mixed round-robin path below.
 	}
 
 	if strategy == schedulerStrategyFillFirst {
@@ -1374,6 +1404,8 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	}
 	var picked *scheduledAuth
 	switch strategy {
+	case schedulerStrategyEarliestResetFirst:
+		picked = view.pickEarliestReset(predicate, time.Now())
 	case schedulerStrategyFillFirst:
 		picked = view.pickFirst(predicate)
 	case schedulerStrategyWeightedRoundRobin:
