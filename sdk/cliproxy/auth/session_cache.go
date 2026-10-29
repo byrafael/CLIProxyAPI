@@ -27,6 +27,10 @@ type sessionEntry struct {
 	binding   sessionBinding
 }
 
+func (entry sessionEntry) validAt(now time.Time) bool {
+	return entry.expiresAt.IsZero() || now.Before(entry.expiresAt)
+}
+
 // SessionCache provides TTL-based session to auth mapping with automatic cleanup.
 type SessionCache struct {
 	mu               sync.RWMutex
@@ -96,7 +100,7 @@ func (c *SessionCache) Get(sessionID string) (string, bool) {
 	c.mu.RLock()
 	now := time.Now()
 	entry, ok := c.entries[sessionID]
-	if ok && now.Before(entry.expiresAt) {
+	if ok && entry.validAt(now) {
 		c.mu.RUnlock()
 		return entry.authID, true
 	}
@@ -112,7 +116,7 @@ func (c *SessionCache) Get(sessionID string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if time.Now().Before(entry.expiresAt) {
+	if entry.validAt(time.Now()) {
 		return entry.authID, true
 	}
 	c.removeAliasGroupLocked(entry)
@@ -133,7 +137,7 @@ func (c *SessionCache) GetAndRefresh(sessionID string) (string, bool) {
 		return "", false
 	}
 	now := time.Now()
-	if !now.Before(entry.expiresAt) {
+	if !entry.validAt(now) {
 		c.removeAliasGroupLocked(entry)
 		return "", false
 	}
@@ -179,7 +183,7 @@ func (c *SessionCache) setAliases(authID string, binding sessionBinding, session
 		if !ok {
 			continue
 		}
-		if !now.Before(entry.expiresAt) {
+		if !entry.validAt(now) {
 			c.removeAliasGroupLocked(entry)
 			continue
 		}
@@ -211,6 +215,11 @@ func (c *SessionCache) replaceAliasGroupsLocked(authID string, expiresAt time.Ti
 		return
 	}
 	primaryKey := aliases[0]
+	// Codex OAuth retains prompt caches across idle conversations. Keep its
+	// account binding until eviction or failover instead of expiring by time.
+	if strings.HasPrefix(primaryKey, "codex::") {
+		expiresAt = time.Time{}
+	}
 	if existing, ok := c.groups[primaryKey]; ok {
 		c.removeAliasGroupLocked(existing)
 	}
@@ -366,7 +375,7 @@ func (c *SessionCache) latestSessionAuth(sessionID string, providers map[string]
 	var latest sessionEntry
 	for key := range c.sessionGroups[sessionID] {
 		entry := c.groups[key]
-		if _, ok := providers[entry.binding.provider]; !ok || !now.Before(entry.expiresAt) {
+		if _, ok := providers[entry.binding.provider]; !ok || !entry.validAt(now) {
 			continue
 		}
 		if entry.binding.sequence > latest.binding.sequence {
@@ -386,7 +395,7 @@ func (c *SessionCache) Touch(sessionID, expectedAuthID string) bool {
 	c.ensureInitializedLocked()
 	now := time.Now()
 	entry, ok := c.entries[sessionID]
-	if !ok || entry.authID != expectedAuthID || !now.Before(entry.expiresAt) {
+	if !ok || entry.authID != expectedAuthID || !entry.validAt(now) {
 		return false
 	}
 	aliases := compactSessionAliases(mergeSessionAliases([]string{sessionID}, entry.aliases...))
@@ -507,7 +516,7 @@ func (c *SessionCache) cleanup() {
 	defer c.mu.Unlock()
 	c.ensureInitializedLocked()
 	for _, group := range c.groups {
-		if !now.Before(group.expiresAt) {
+		if !group.validAt(now) {
 			c.removeAliasGroupLocked(group)
 		}
 	}

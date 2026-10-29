@@ -457,7 +457,7 @@ type QuotaExceeded struct {
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
 	// Strategy selects the credential selection strategy.
-	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
+	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first", "earliest-reset-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
 	// SessionAffinity enables universal session-sticky routing for all clients.
@@ -487,6 +487,12 @@ type RoutingConfig struct {
 	//     auth errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
 	// Ignored when SessionAffinity is false.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
+
+	// QuotaRecheckInterval sets how often Codex credentials in a quota cooldown are checked
+	// against the upstream usage endpoint. A credential whose usage window has been reset
+	// upstream leaves cooldown early instead of waiting for the stored end time.
+	// Accepts duration strings like "10m". Empty or non-positive disables the recheck.
+	QuotaRecheckInterval string `yaml:"quota-recheck-interval,omitempty" json:"quota-recheck-interval,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.
