@@ -22,3 +22,19 @@ func TestEarliestResetRoutingConfig(t *testing.T) {
 	}
 	defer affinity.Stop()
 }
+
+func TestResetWeightedRoutingConfig(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Routing.Strategy = "  RESET-WEIGHTED-ROUND-ROBIN "
+	selector := newRoutingSelector(normalizedRoutingRuntimeState(cfg))
+	weighted, ok := selector.(*coreauth.WeightedRoundRobinSelector)
+	if !ok || !weighted.ResetWeighted {
+		t.Fatalf("selector = %#v", selector)
+	}
+	cfg.Routing.SessionAffinity = true
+	affinity, ok := newRoutingSelector(normalizedRoutingRuntimeState(cfg)).(*coreauth.SessionAffinitySelector)
+	if !ok {
+		t.Fatal("reset-weighted strategy lost session affinity")
+	}
+	defer affinity.Stop()
+}

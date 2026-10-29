@@ -23,6 +23,7 @@ const (
 	schedulerStrategyFillFirst          schedulerStrategy = 2
 	schedulerStrategyWeightedRoundRobin schedulerStrategy = 3
 	schedulerStrategyEarliestResetFirst schedulerStrategy = 4
+	schedulerStrategyResetWeighted      schedulerStrategy = 5
 )
 
 // scheduledState describes how an auth currently participates in a model shard.
@@ -166,10 +167,13 @@ func newAuthScheduler(selector Selector) *authScheduler {
 
 // selectorStrategy maps a selector implementation to the scheduler semantics it should emulate.
 func selectorStrategy(selector Selector) schedulerStrategy {
-	switch selector.(type) {
+	switch typed := selector.(type) {
 	case *FillFirstSelector:
 		return schedulerStrategyFillFirst
 	case *WeightedRoundRobinSelector:
+		if typed.ResetWeighted {
+			return schedulerStrategyResetWeighted
+		}
 		return schedulerStrategyWeightedRoundRobin
 	case *EarliestResetFirstSelector:
 		return schedulerStrategyEarliestResetFirst
@@ -424,7 +428,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	if shard == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin)
+	predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin || strategy == schedulerStrategyResetWeighted)
 	if picked := shard.pickReadyLocked(preferWebsocket, strategy, predicate); picked != nil {
 		return picked, nil
 	}
@@ -485,14 +489,14 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 			return nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
 		shard := providerState.ensureModelLocked(modelKey, time.Now())
-		predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin)
+		predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin || strategy == schedulerStrategyResetWeighted)
 		if picked := shard.pickReadyLocked(false, strategy, predicate); picked != nil {
 			return picked, providerKey, nil
 		}
 		return nil, "", shard.unavailableErrorLocked("mixed", model, predicate)
 	}
 
-	predicate := scheduledAuthPredicate(eligibility, tried, "", strategy == schedulerStrategyWeightedRoundRobin)
+	predicate := scheduledAuthPredicate(eligibility, tried, "", strategy == schedulerStrategyWeightedRoundRobin || strategy == schedulerStrategyResetWeighted)
 	candidateShards := make([]*modelScheduler, len(normalized))
 	bestPriority := 0
 	hasCandidate := false
@@ -562,7 +566,7 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 	}
 
 	cursorKey := strings.Join(normalized, ",") + ":" + modelKey
-	if strategy == schedulerStrategyWeightedRoundRobin {
+	if strategy == schedulerStrategyWeightedRoundRobin || strategy == schedulerStrategyResetWeighted {
 		entries := make([]*scheduledAuth, 0)
 		for _, shard := range candidateShards {
 			if shard == nil {
@@ -590,8 +594,12 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 			state = &smoothWeightedState{}
 			s.mixedWeightedStates[cursorKey] = state
 		}
-		state.prepare(scheduledWeightVectorMatching(entries, predicate))
-		picked := pickSmoothWeightedScheduled(entries, state.current, predicate)
+		weights := scheduledWeightVectorMatching(entries, predicate)
+		state.prepare(weights)
+		if strategy == schedulerStrategyResetWeighted {
+			weights = scheduledResetWeights(entries, predicate, now)
+		}
+		picked := pickSmoothWeightedScheduledWithWeights(entries, state.current, predicate, weights)
 		if picked != nil && picked.meta != nil {
 			return picked.auth, picked.meta.providerKey, nil
 		}
@@ -1414,8 +1422,8 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 		picked = view.pickEarliestReset(predicate, time.Now())
 	case schedulerStrategyFillFirst:
 		picked = view.pickFirst(predicate)
-	case schedulerStrategyWeightedRoundRobin:
-		picked = view.pickWeighted(predicate)
+	case schedulerStrategyWeightedRoundRobin, schedulerStrategyResetWeighted:
+		picked = view.pickWeighted(predicate, strategy == schedulerStrategyResetWeighted)
 	default:
 		picked = view.pickRoundRobin(predicate)
 	}
@@ -1718,12 +1726,16 @@ func scheduledSuccessorIndex(entries []*scheduledAuth, lastID string) int {
 }
 
 // pickWeighted returns the next ready entry using smooth weighted round-robin.
-func (v *readyView) pickWeighted(predicate func(*scheduledAuth) bool) *scheduledAuth {
+func (v *readyView) pickWeighted(predicate func(*scheduledAuth) bool, resetWeighted bool) *scheduledAuth {
 	if v == nil || len(v.flat) == 0 {
 		return nil
 	}
-	v.weightedState.prepare(scheduledWeightVectorMatching(v.flat, predicate))
-	return pickSmoothWeightedScheduled(v.flat, v.weightedState.current, predicate)
+	weights := scheduledWeightVectorMatching(v.flat, predicate)
+	v.weightedState.prepare(weights)
+	if resetWeighted {
+		weights = scheduledResetWeights(v.flat, predicate, time.Now())
+	}
+	return pickSmoothWeightedScheduledWithWeights(v.flat, v.weightedState.current, predicate, weights)
 }
 
 func scheduledWeightVector(entries []*scheduledAuth) map[string]int64 {
@@ -1744,7 +1756,7 @@ func scheduledWeightVectorMatching(entries []*scheduledAuth, predicate func(*sch
 	return weights
 }
 
-func pickSmoothWeightedScheduled(entries []*scheduledAuth, current map[string]int64, predicate func(*scheduledAuth) bool) *scheduledAuth {
+func pickSmoothWeightedScheduledWithWeights(entries []*scheduledAuth, current map[string]int64, predicate func(*scheduledAuth) bool, weights map[string]int64) *scheduledAuth {
 	var picked *scheduledAuth
 	var pickedCurrent int64
 	var totalWeight int64
@@ -1755,8 +1767,9 @@ func pickSmoothWeightedScheduled(entries []*scheduledAuth, current map[string]in
 		if predicate != nil && !predicate(entry) {
 			continue
 		}
-		current[entry.auth.ID] = saturatingAddInt64(current[entry.auth.ID], entry.meta.weight)
-		totalWeight = saturatingAddInt64(totalWeight, entry.meta.weight)
+		weight := weights[entry.auth.ID]
+		current[entry.auth.ID] = saturatingAddInt64(current[entry.auth.ID], weight)
+		totalWeight = saturatingAddInt64(totalWeight, weight)
 		if picked == nil || current[entry.auth.ID] > pickedCurrent {
 			picked = entry
 			pickedCurrent = current[entry.auth.ID]

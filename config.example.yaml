@@ -160,7 +160,10 @@ access:
 
 # Routing strategy for selecting credentials when multiple match.
 routing:
-  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, earliest-reset-first
+  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, earliest-reset-first, reset-weighted-round-robin
+  # reset-weighted-round-robin spreads traffic, giving sooner weekly resets up to 4x weight.
+  # It multiplies credential weights; unknown/stale resets get baseline weight.
+  # Existing session-affinity bindings remain pinned; new sessions use the weights.
   # earliest-reset-first prefers the earliest observed weekly reset for Codex, Claude, and Devin.
   # Explicit priorities and cooldowns still apply. Missing, expired, or observations older
   # than 24 hours use round-robin. Session affinity preserves existing bindings.
