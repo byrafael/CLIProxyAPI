@@ -241,7 +241,7 @@ func AntigravityWebSearchModelFor(modelID string) string {
 
 // GetXAIModels returns the standard xAI Grok model definitions.
 func GetXAIModels() []*ModelInfo {
-	return FilterXAIAllowedModels(WithXAIBuiltins(cloneModelInfos(getModels().XAI)))
+	return WithXAIBuiltins(cloneModelInfos(getModels().XAI))
 }
 
 // WithCodexBuiltins injects hard-coded Codex-only model definitions that should

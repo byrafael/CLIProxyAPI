@@ -58,13 +58,9 @@ upstream:
 					if _, err = manager.Register(context.Background(), auth); err != nil {
 						t.Fatal(err)
 					}
-					modelID := "gpt-5.4"
-					if provider == "xai" {
-						modelID = "grok-4.7"
-					}
-					registry.GetGlobalRegistry().RegisterClient(auth.ID, provider, []*registry.ModelInfo{{ID: modelID}})
+					registry.GetGlobalRegistry().RegisterClient(auth.ID, provider, []*registry.ModelInfo{{ID: "gpt-5.4"}})
 					t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(auth.ID) })
-					req := cliproxyexecutor.Request{Model: modelID, Payload: []byte(`{
+					req := cliproxyexecutor.Request{Model: "gpt-5.4", Payload: []byte(`{
   "input":[{"type":"function_call_output","name":"create_thread","namespace":"codex_app","output":"<codex_delegation>task</codex_delegation>"}],
   "tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","description":"Spawns an agent.","parameters":{"type":"object","properties":{"message":{"type":"string","encrypted":true}}}}]}]
 }`)}
