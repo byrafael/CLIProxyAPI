@@ -153,6 +153,51 @@ func TestCountXAIInputTokensExcludesRequestStructure(t *testing.T) {
 	}
 }
 
+func TestXAIExecutorRejectsClaudeAndOpenAIModels(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("xAI upstream must not be called for disallowed models")
+	}))
+	t.Cleanup(server.Close)
+
+	exec := NewXAIExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{
+		ID:       "xai-auth",
+		Provider: "xai",
+		Attributes: map[string]string{
+			"base_url":  server.URL,
+			"auth_kind": "oauth",
+		},
+		Metadata: map[string]any{"access_token": "xai-token"},
+	}
+
+	for _, model := range []string{"claude-sonnet-4-5-20250929", "gpt-5.6", "o1"} {
+		_, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
+			Model:   model,
+			Payload: []byte(`{"model":"` + model + `","input":"hello"}`),
+		}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse})
+		if err == nil {
+			t.Fatalf("Execute(%q) error = nil, want rejection", model)
+		}
+		var status statusErr
+		if !errors.As(err, &status) || status.StatusCode() != http.StatusBadRequest {
+			t.Fatalf("Execute(%q) error = %v, want HTTP 400", model, err)
+		}
+		if !strings.Contains(err.Error(), "model_not_supported") {
+			t.Fatalf("Execute(%q) error = %v, want model_not_supported", model, err)
+		}
+
+		_, err = exec.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+			Model:   model,
+			Payload: []byte(`{"model":"` + model + `","input":"hello"}`),
+		}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Stream: true})
+		if err == nil {
+			t.Fatalf("ExecuteStream(%q) error = nil, want rejection", model)
+		}
+	}
+}
+
 func TestXAIExecutorExecuteShapesResponsesRequest(t *testing.T) {
 	var gotPath string
 	var gotAuth string

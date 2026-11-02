@@ -425,6 +425,9 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	if e == nil || e.XAIExecutor == nil {
 		return nil, fmt.Errorf("xai websockets executor: executor is nil")
 	}
+	if err = rejectIfXAIModelDisallowed(req.Model); err != nil {
+		return nil, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
