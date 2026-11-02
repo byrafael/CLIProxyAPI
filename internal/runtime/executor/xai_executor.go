@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -93,6 +94,16 @@ func StartXAIVersionUpdater(ctx context.Context, proxyURL string) {
 // Identifier returns the provider identifier.
 func (e *XAIExecutor) Identifier() string {
 	return "xai"
+}
+
+func rejectIfXAIModelDisallowed(model string) error {
+	if !registry.IsXAIForeignModelID(model) {
+		return nil
+	}
+	return statusErr{
+		code: http.StatusBadRequest,
+		msg:  `{"error":{"type":"invalid_request_error","code":"model_not_supported","message":"xAI credentials only accept grok-* and composer-* models"}}`,
+	}
 }
 
 // PrepareRequest injects xAI credentials into the outgoing HTTP request.

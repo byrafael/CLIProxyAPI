@@ -329,6 +329,9 @@ func (s *Service) registerModelsForAuthWithConfigAndCache(ctx context.Context, c
 		key = strings.ToLower(strings.TrimSpace(a.Provider))
 	}
 	models = s.appendPluginModels(key, models, excluded)
+	if strings.EqualFold(key, "xai") || strings.EqualFold(provider, "xai") {
+		models = registry.FilterXAIAllowedModels(models)
+	}
 	if len(models) > 0 {
 		models = applyOAuthSettingsForAuth(cfg, provider, authKind, models)
 		published = s.registerResolvedModelsForAuthFenced(a, fence, key, applyModelPrefixes(models, a.Prefix, cfg != nil && cfg.ForceModelPrefix))
