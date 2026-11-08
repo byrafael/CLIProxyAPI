@@ -1,6 +1,7 @@
 package xai
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -69,15 +70,20 @@ func (ts *TokenStorage) SaveTokenToFile(authFilePath string) error {
 	return nil
 }
 
-// CredentialFileName returns the filename used for xAI credentials.
+// CredentialFileName distinguishes accounts sharing an email by OAuth subject.
+// Keep the email-only filename as a fallback for credentials without a subject.
 func CredentialFileName(email, subject string) string {
 	email = sanitizeFileSegment(email)
+	subject = strings.TrimSpace(subject)
+	if subject != "" {
+		digest := sha256.Sum256([]byte(subject))
+		if email != "" {
+			return fmt.Sprintf("xai-%x-%s.json", digest[:16], email)
+		}
+		return fmt.Sprintf("xai-%x.json", digest[:16])
+	}
 	if email != "" {
 		return fmt.Sprintf("xai-%s.json", email)
-	}
-	subject = sanitizeFileSegment(subject)
-	if subject != "" {
-		return fmt.Sprintf("xai-%s.json", subject)
 	}
 	return fmt.Sprintf("xai-%d.json", time.Now().UnixMilli())
 }
