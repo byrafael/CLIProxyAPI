@@ -3,11 +3,12 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"testing"
+
 	xaiauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"os"
-	"testing"
 )
 
 func TestXAIAuthenticatorProviderAndRefreshLead(t *testing.T) {
@@ -27,13 +28,15 @@ func TestManagerLoginXAISharedEmail(t *testing.T) {
 	authenticator := &dummyAuthenticator{provider: "xai"}
 	manager := NewManager(store, authenticator)
 	cfg := &config.Config{AuthDir: dir}
-	login := func(subject, token string) string {
+	login := func(tier, token string) string {
 		t.Helper()
-		name := xaiauth.CredentialFileName("shared@example.com", subject)
+		storage := &xaiauth.TokenStorage{Email: "shared@example.com", Subject: "same-subject", AccessToken: token,
+			AccountContext: xaiauth.AccountContext{SubscriptionTier: tier}}
+		name := xaiauth.CredentialFileNameForStorage(storage)
 		authenticator.record = &coreauth.Auth{
 			ID: name, FileName: name, Provider: "xai",
-			Storage:  &xaiauth.TokenStorage{Email: "shared@example.com", Subject: subject, AccessToken: token},
-			Metadata: map[string]any{"type": "xai", "email": "shared@example.com", "sub": subject, "access_token": token},
+			Storage:  storage,
+			Metadata: map[string]any{"type": "xai", "email": "shared@example.com", "sub": "same-subject", "subscription_tier": tier, "access_token": token},
 		}
 		_, path, err := manager.Login(context.Background(), "xai", cfg, nil)
 		if err != nil {
@@ -41,12 +44,12 @@ func TestManagerLoginXAISharedEmail(t *testing.T) {
 		}
 		return path
 	}
-	personal := login("personal-account", "personal-token")
-	company := login("company-account", "company-token")
+	personal := login("XPremiumPlus", "personal-token")
+	company := login("XUltra", "company-token")
 	if personal == company {
 		t.Fatal("second account overwrote the first")
 	}
-	if got := login("personal-account", "personal-token-refreshed"); got != personal {
+	if got := login("XPremiumPlus", "personal-token-refreshed"); got != personal {
 		t.Fatalf("repeat login created another file: %s", got)
 	}
 	entries, err := os.ReadDir(dir)

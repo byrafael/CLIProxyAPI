@@ -594,11 +594,18 @@ func (h *Handler) RequestXAIToken(c *gin.Context) {
 			return
 		}
 
-		fileName := xaiauth.CredentialFileName(tokenStorage.Email, tokenStorage.Subject)
+		if err := authSvc.ResolveAccountContext(pollCtx, tokenStorage); err != nil {
+			log.Warn("xAI account context lookup failed; existing credentials retained")
+			SetOAuthSessionError(state, "Could not resolve xAI account context and subscription; credential not saved. Please retry.")
+			return
+		}
+		fileName := xaiauth.CredentialFileNameForStorage(tokenStorage)
 		label := strings.TrimSpace(tokenStorage.Email)
 		if label == "" {
 			label = "xAI"
 		}
+
+		label += " (" + tokenStorage.SubscriptionTier + ")"
 
 		metadata := map[string]any{
 			"type":           "xai",
@@ -612,6 +619,9 @@ func (h *Handler) RequestXAIToken(c *gin.Context) {
 			"base_url":       tokenStorage.BaseURL,
 			"token_endpoint": tokenStorage.TokenEndpoint,
 			"auth_kind":      "oauth",
+		}
+		for key, value := range tokenStorage.AccountMetadata() {
+			metadata[key] = value
 		}
 		if tokenStorage.Email != "" {
 			metadata["email"] = tokenStorage.Email

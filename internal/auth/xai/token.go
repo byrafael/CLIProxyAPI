@@ -15,6 +15,8 @@ import (
 
 // TokenStorage stores xAI OAuth credentials on disk.
 type TokenStorage struct {
+	AccountContext
+
 	Type          string `json:"type"`
 	AccessToken   string `json:"access_token"`
 	RefreshToken  string `json:"refresh_token"`

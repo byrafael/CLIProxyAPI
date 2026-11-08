@@ -89,11 +89,16 @@ func (a XAIAuthenticator) Login(ctx context.Context, cfg *config.Config, opts *L
 		return nil, fmt.Errorf("xai token storage missing access token")
 	}
 
-	fileName := xaiauth.CredentialFileName(tokenStorage.Email, tokenStorage.Subject)
+	if err := authSvc.ResolveAccountContext(ctx, tokenStorage); err != nil {
+		return nil, err
+	}
+	fileName := xaiauth.CredentialFileNameForStorage(tokenStorage)
 	label := strings.TrimSpace(tokenStorage.Email)
 	if label == "" {
 		label = "xAI"
 	}
+
+	label += " (" + tokenStorage.SubscriptionTier + ")"
 
 	metadata := map[string]any{
 		"type":           "xai",
@@ -107,6 +112,9 @@ func (a XAIAuthenticator) Login(ctx context.Context, cfg *config.Config, opts *L
 		"base_url":       tokenStorage.BaseURL,
 		"token_endpoint": tokenStorage.TokenEndpoint,
 		"auth_kind":      "oauth",
+	}
+	for key, value := range tokenStorage.AccountMetadata() {
+		metadata[key] = value
 	}
 	if tokenStorage.Email != "" {
 		metadata["email"] = tokenStorage.Email
