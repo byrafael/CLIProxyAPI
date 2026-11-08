@@ -170,6 +170,12 @@ func (s *Service) Run(ctx context.Context) error {
 		})
 	}
 
+	// Publish loaded accounts before opening the listener. A request arriving
+	// between HTTP startup and the initial watcher scan must not see an empty registry.
+	if !homeEnabled && s.coreManager != nil {
+		s.registerModelsForAuthBatch(ctx, s.coreManager.List())
+	}
+
 	if s.hooks.OnBeforeStart != nil {
 		s.hooks.OnBeforeStart(s.currentConfig())
 	}
