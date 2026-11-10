@@ -76,3 +76,13 @@ func TestResolveAccountContextFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestCredentialFileNameForStoragePreservesExistingContextFile(t *testing.T) {
+	storage := &TokenStorage{Subject: "same-subject", Email: "same@example.com", AccountContext: AccountContext{
+		UserID: "same-user", PrincipalType: "team", PrincipalID: "team-1", TeamID: "team-1", OrganizationID: "org-1", SubscriptionTier: "XUltra",
+	}}
+	const existing = "xai-xultra-3c0a04e7bed2ff61b2a20b1503a89389-same@example.com.json"
+	if got := CredentialFileNameForStorage(storage); got != existing {
+		t.Fatalf("credential filename = %q, want existing file %q", got, existing)
+	}
+}

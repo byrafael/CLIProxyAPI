@@ -249,3 +249,58 @@ func TestResetWeightedHonorsCapacityWeights(t *testing.T) {
 		})
 	}
 }
+
+// Pins and sticky sessions must charge the same reset-weighted pool as fresh
+// requests, including the scheduler's single- and mixed-provider fast paths.
+func TestResetWeightedPinnedAccounting(t *testing.T) {
+	for _, mode := range []string{"single", "mixed", "affinity"} {
+		t.Run(mode, func(t *testing.T) {
+			now := time.Now()
+			a := resetTestAuth("pin-a", "codex", now, now.Add(time.Hour))
+			b := resetTestAuth("pin-b", "codex", now, now.Add(time.Hour))
+			if mode == "mixed" {
+				b.Provider = "claude"
+			}
+			const model = "reset-pin-model"
+			registerSchedulerModels(t, a.Provider, model, a.ID)
+			registerSchedulerModels(t, b.Provider, model, b.ID)
+			weighted := &WeightedRoundRobinSelector{ResetWeighted: true}
+			scheduler := newSchedulerForTest(weighted, a, b)
+			affinity := NewSessionAffinitySelector(weighted)
+			defer affinity.Stop()
+			pick := func(pinned bool) (*Auth, error) {
+				opts := cliproxyexecutor.Options{}
+				if pinned {
+					opts.Metadata = map[string]any{cliproxyexecutor.PinnedAuthMetadataKey: b.ID}
+				}
+				switch mode {
+				case "single":
+					return scheduler.pickSingle(t.Context(), "codex", model, opts, nil)
+				case "mixed":
+					got, _, err := scheduler.pickMixed(t.Context(), []string{"codex", "claude"}, model, opts, nil)
+					return got, err
+				default:
+					ctx := t.Context()
+					candidates := []*Auth{a, b}
+					if pinned {
+						ctx = context.WithValue(ctx, weightedAccountingPoolKey{}, candidates)
+						candidates = []*Auth{b}
+					}
+					return affinity.Pick(ctx, "codex", model, opts, candidates)
+				}
+			}
+			for i := 0; i < 10; i++ {
+				got, err := pick(true)
+				if err != nil || got.ID != b.ID {
+					t.Fatalf("pinned pick = %v, %v", got, err)
+				}
+			}
+			for i := 0; i < 10; i++ {
+				got, err := pick(false)
+				if err != nil || got.ID != a.ID {
+					t.Fatalf("compensating pick = %v, %v", got, err)
+				}
+			}
+		})
+	}
+}

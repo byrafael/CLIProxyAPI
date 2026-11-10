@@ -1,13 +1,10 @@
 package xai
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
 	log "github.com/sirupsen/logrus"
@@ -70,45 +67,4 @@ func (ts *TokenStorage) SaveTokenToFile(authFilePath string) error {
 		return fmt.Errorf("xai token storage: write token file: %w", err)
 	}
 	return nil
-}
-
-// CredentialFileName distinguishes accounts sharing an email by OAuth subject.
-// Keep the email-only filename as a fallback for credentials without a subject.
-func CredentialFileName(email, subject string) string {
-	email = sanitizeFileSegment(email)
-	subject = strings.TrimSpace(subject)
-	if subject != "" {
-		digest := sha256.Sum256([]byte(subject))
-		if email != "" {
-			return fmt.Sprintf("xai-%x-%s.json", digest[:16], email)
-		}
-		return fmt.Sprintf("xai-%x.json", digest[:16])
-	}
-	if email != "" {
-		return fmt.Sprintf("xai-%s.json", email)
-	}
-	return fmt.Sprintf("xai-%d.json", time.Now().UnixMilli())
-}
-
-func sanitizeFileSegment(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '@' || r == '.' || r == '_' || r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
 }

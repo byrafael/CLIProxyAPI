@@ -2,11 +2,13 @@ package xai
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 )
@@ -81,7 +83,7 @@ func (a *XAIAuth) ResolveAccountContext(ctx context.Context, storage *TokenStora
 func CredentialFileNameForStorage(storage *TokenStorage) string {
 	identity, _ := json.Marshal([]string{strings.TrimSpace(storage.Subject), storage.UserID, storage.XUserID,
 		storage.PrincipalType, storage.PrincipalID, storage.TeamID, storage.OrganizationID, storage.SubscriptionTier})
-	name := CredentialFileName(storage.Email, string(identity))
+	name := credentialFileNameForAccountContext(storage.Email, string(identity))
 	tier := strings.ToLower(sanitizeFileSegment(storage.SubscriptionTier))
 	if len(tier) > 48 {
 		tier = tier[:48]
@@ -98,4 +100,22 @@ func (ts *TokenStorage) AccountMetadata() map[string]any {
 	var metadata map[string]any
 	_ = json.Unmarshal(raw, &metadata)
 	return metadata
+}
+
+// credentialFileNameForAccountContext preserves the fork's context-specific
+// filenames independently of upstream's email-based legacy migration helpers.
+func credentialFileNameForAccountContext(email, identity string) string {
+	email = sanitizeFileSegment(email)
+	identity = strings.TrimSpace(identity)
+	if identity != "" {
+		digest := sha256.Sum256([]byte(identity))
+		if email != "" {
+			return fmt.Sprintf("xai-%x-%s.json", digest[:16], email)
+		}
+		return fmt.Sprintf("xai-%x.json", digest[:16])
+	}
+	if email != "" {
+		return fmt.Sprintf("xai-%s.json", email)
+	}
+	return fmt.Sprintf("xai-%d.json", time.Now().UnixMilli())
 }
