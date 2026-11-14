@@ -105,6 +105,11 @@ type Server struct {
 	keepAliveHeartbeat chan struct{}
 	keepAliveStop      chan struct{}
 
+	// quotaHistoryMu serializes starting and stopping the quota history recorder.
+	quotaHistoryMu sync.Mutex
+	// quotaHistoryStop stops the running recorder and waits for it; nil when none runs.
+	quotaHistoryStop func()
+
 	exampleAPIKeySafeModeEnabled bool
 	exampleAPIKeySafeModeActive  atomic.Bool
 }
@@ -341,6 +346,10 @@ func (s *Server) Start() error {
 		log.Debugf("Starting API server on %s", addr)
 	}
 
+	// Record quota history only while this server is actually serving.
+	s.startQuotaHistory()
+	defer s.stopQuotaHistory()
+
 	httpListener := newMuxListener(listener.Addr(), 1024)
 	s.listenerMu.Lock()
 	s.muxBaseListener = listener
@@ -411,6 +420,28 @@ func (s *Server) Start() error {
 	}
 }
 
+// startQuotaHistory starts the quota history recorder unless one is already running.
+func (s *Server) startQuotaHistory() {
+	s.quotaHistoryMu.Lock()
+	defer s.quotaHistoryMu.Unlock()
+	if s.mgmt == nil || s.quotaHistoryStop != nil {
+		return
+	}
+	s.quotaHistoryStop = s.mgmt.StartQuotaHistoryRecorder()
+}
+
+// stopQuotaHistory stops the recorder and waits for its last save, so a following
+// start loads everything it wrote.
+func (s *Server) stopQuotaHistory() {
+	s.quotaHistoryMu.Lock()
+	defer s.quotaHistoryMu.Unlock()
+	if s.quotaHistoryStop == nil {
+		return
+	}
+	s.quotaHistoryStop()
+	s.quotaHistoryStop = nil
+}
+
 // Stop closes listeners and immediately shuts down the API server without waiting for active connections.
 //
 // Parameters:
@@ -420,6 +451,8 @@ func (s *Server) Start() error {
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
+
+	s.stopQuotaHistory()
 
 	if s.keepAliveEnabled {
 		select {
