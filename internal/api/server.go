@@ -105,6 +105,9 @@ type Server struct {
 	keepAliveHeartbeat chan struct{}
 	keepAliveStop      chan struct{}
 
+	// quotaHistoryStop ends the background quota history recorder.
+	quotaHistoryStop context.CancelFunc
+
 	exampleAPIKeySafeModeEnabled bool
 	exampleAPIKeySafeModeActive  atomic.Bool
 }
@@ -308,6 +311,12 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to start HTTP server: %v", errListen)
 	}
 
+	if s.mgmt != nil && s.quotaHistoryStop == nil {
+		recorderCtx, stopRecorder := context.WithCancel(context.Background())
+		s.quotaHistoryStop = stopRecorder
+		s.mgmt.StartQuotaHistoryRecorder(recorderCtx)
+	}
+
 	cfg := s.getConfig()
 	useTLS := cfg != nil && cfg.TLS.Enable
 	if useTLS {
@@ -420,6 +429,11 @@ func (s *Server) Start() error {
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
+
+	if s.quotaHistoryStop != nil {
+		s.quotaHistoryStop()
+		s.quotaHistoryStop = nil
+	}
 
 	if s.keepAliveEnabled {
 		select {
