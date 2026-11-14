@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,4 +144,44 @@ func TestQuotaHistoryRecorderStopWaitsAndRestarts(t *testing.T) {
 	}
 	// Without a config path there is nothing to persist, so nothing starts.
 	(&Handler{}).StartQuotaHistoryRecorder()()
+}
+
+func TestSampleQuotaHistorySavesWhatItRecordedBeforeShutdown(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Shutdown arrives while the second credential is being read, after the
+		// first one was recorded and with a third still to go.
+		if calls.Add(1) == 2 {
+			cancel()
+			<-r.Context().Done()
+			return
+		}
+		_, _ = w.Write([]byte(`{"seven_day":{"utilization":25,"resets_at":"2026-11-17T09:00:00Z"}}`))
+	}))
+	defer upstream.Close()
+	claudeUsageURL = upstream.URL
+	t.Cleanup(func() { claudeUsageURL = "https://api.anthropic.com/api/oauth/usage" })
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	for _, id := range []string{"claude-a", "claude-b", "claude-c"} {
+		auth := &coreauth.Auth{ID: id, FileName: id + ".json", Provider: "claude", Metadata: map[string]any{"access_token": "t"}}
+		if _, err := manager.Register(context.Background(), auth); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+	}
+	dir := t.TempDir()
+	h := NewHandler(&config.Config{}, filepath.Join(dir, "config.yaml"), manager)
+	recorder := &quotaHistoryRecorder{path: h.quotaHistoryPath(), history: quotahistory.History{}, backoffTo: map[string]time.Time{}}
+
+	h.sampleQuotaHistory(ctx, recorder, time.Date(2026, 11, 14, 8, 0, 0, 0, time.UTC))
+
+	if saved := quotahistory.Load(filepath.Join(dir, "quota-history.json")); len(saved) != 1 {
+		t.Fatalf("saved %d series, want the 1 recorded before shutdown", len(saved))
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("upstream calls = %d, want 2 (no reads after shutdown)", got)
+	}
 }

@@ -104,8 +104,9 @@ func (h *Handler) StartQuotaHistoryRecorder() (stop func()) {
 func (h *Handler) sampleQuotaHistory(ctx context.Context, recorder *quotaHistoryRecorder, now time.Time) {
 	changed := false
 	for _, auth := range h.authManager.List() {
+		// On shutdown, stop reading but still save what this cycle already recorded.
 		if ctx.Err() != nil {
-			return
+			break
 		}
 		name, provider, ok := quotaHistoryTarget(auth)
 		if !ok {
