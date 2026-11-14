@@ -105,8 +105,10 @@ type Server struct {
 	keepAliveHeartbeat chan struct{}
 	keepAliveStop      chan struct{}
 
-	// quotaHistoryStop ends the background quota history recorder.
-	quotaHistoryStop context.CancelFunc
+	// quotaHistoryMu serializes starting and stopping the quota history recorder.
+	quotaHistoryMu sync.Mutex
+	// quotaHistoryStop stops the running recorder and waits for it; nil when none runs.
+	quotaHistoryStop func()
 
 	exampleAPIKeySafeModeEnabled bool
 	exampleAPIKeySafeModeActive  atomic.Bool
@@ -311,12 +313,6 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to start HTTP server: %v", errListen)
 	}
 
-	if s.mgmt != nil && s.quotaHistoryStop == nil {
-		recorderCtx, stopRecorder := context.WithCancel(context.Background())
-		s.quotaHistoryStop = stopRecorder
-		s.mgmt.StartQuotaHistoryRecorder(recorderCtx)
-	}
-
 	cfg := s.getConfig()
 	useTLS := cfg != nil && cfg.TLS.Enable
 	if useTLS {
@@ -349,6 +345,10 @@ func (s *Server) Start() error {
 	} else {
 		log.Debugf("Starting API server on %s", addr)
 	}
+
+	// Record quota history only while this server is actually serving.
+	s.startQuotaHistory()
+	defer s.stopQuotaHistory()
 
 	httpListener := newMuxListener(listener.Addr(), 1024)
 	s.listenerMu.Lock()
@@ -420,6 +420,28 @@ func (s *Server) Start() error {
 	}
 }
 
+// startQuotaHistory starts the quota history recorder unless one is already running.
+func (s *Server) startQuotaHistory() {
+	s.quotaHistoryMu.Lock()
+	defer s.quotaHistoryMu.Unlock()
+	if s.mgmt == nil || s.quotaHistoryStop != nil {
+		return
+	}
+	s.quotaHistoryStop = s.mgmt.StartQuotaHistoryRecorder()
+}
+
+// stopQuotaHistory stops the recorder and waits for its last save, so a following
+// start loads everything it wrote.
+func (s *Server) stopQuotaHistory() {
+	s.quotaHistoryMu.Lock()
+	defer s.quotaHistoryMu.Unlock()
+	if s.quotaHistoryStop == nil {
+		return
+	}
+	s.quotaHistoryStop()
+	s.quotaHistoryStop = nil
+}
+
 // Stop closes listeners and immediately shuts down the API server without waiting for active connections.
 //
 // Parameters:
@@ -430,10 +452,7 @@ func (s *Server) Start() error {
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
 
-	if s.quotaHistoryStop != nil {
-		s.quotaHistoryStop()
-		s.quotaHistoryStop = nil
-	}
+	s.stopQuotaHistory()
 
 	if s.keepAliveEnabled {
 		select {

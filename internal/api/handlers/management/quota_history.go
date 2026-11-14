@@ -64,19 +64,24 @@ func (h *Handler) quotaHistoryPath() string {
 	return filepath.Join(filepath.Dir(h.configFilePath), quotaHistoryFile)
 }
 
-// StartQuotaHistoryRecorder runs the recorder until ctx ends. Without a config file
-// path there is nowhere to persist history, so it does nothing.
-func (h *Handler) StartQuotaHistoryRecorder(ctx context.Context) {
+// StartQuotaHistoryRecorder starts the recorder and returns a function that stops it
+// and waits until any in-flight sample and save have finished, so a later start never
+// runs beside it. Without a config file path there is nowhere to persist history, so
+// it does nothing.
+func (h *Handler) StartQuotaHistoryRecorder() (stop func()) {
 	path := h.quotaHistoryPath()
 	if path == "" || h.authManager == nil {
-		return
+		return func() {}
 	}
 	recorder := &quotaHistoryRecorder{path: path, history: quotahistory.Load(path), backoffTo: map[string]time.Time{}}
 	h.mu.Lock()
 	h.quotaHistory = recorder
 	h.mu.Unlock()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		timer := time.NewTimer(quotaHistoryFirstRun)
 		defer timer.Stop()
 		for {
@@ -90,6 +95,10 @@ func (h *Handler) StartQuotaHistoryRecorder(ctx context.Context) {
 			}
 		}
 	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func (h *Handler) sampleQuotaHistory(ctx context.Context, recorder *quotaHistoryRecorder, now time.Time) {

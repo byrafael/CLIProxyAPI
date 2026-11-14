@@ -127,3 +127,20 @@ func TestSampleQuotaHistoryRecordsAndPersists(t *testing.T) {
 		t.Fatalf("codex calls after backoff = %d, want 2", codexCalls)
 	}
 }
+
+func TestQuotaHistoryRecorderStopWaitsAndRestarts(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	h := NewHandler(&config.Config{}, filepath.Join(t.TempDir(), "config.yaml"), coreauth.NewManager(nil, nil, nil))
+	for i := 0; i < 2; i++ {
+		stop := h.StartQuotaHistoryRecorder()
+		returned := make(chan struct{})
+		go func() { stop(); close(returned) }()
+		select {
+		case <-returned:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("stop %d did not return", i)
+		}
+	}
+	// Without a config path there is nothing to persist, so nothing starts.
+	(&Handler{}).StartQuotaHistoryRecorder()()
+}
