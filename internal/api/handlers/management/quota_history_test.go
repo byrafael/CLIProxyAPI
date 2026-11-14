@@ -185,3 +185,24 @@ func TestSampleQuotaHistorySavesWhatItRecordedBeforeShutdown(t *testing.T) {
 		t.Fatalf("upstream calls = %d, want 2 (no reads after shutdown)", got)
 	}
 }
+
+func TestSampleQuotaHistoryExpiresOldSamplesWithoutNewReads(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	dir := t.TempDir()
+	h := NewHandler(&config.Config{}, filepath.Join(dir, "config.yaml"), coreauth.NewManager(nil, nil, nil))
+	old := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	history := quotahistory.History{}
+	history.Record("codex-a.json#weekly", "codex", quotahistory.Window{Remaining: 50, ResetsAt: old, PeriodHours: 168}, old)
+	path := h.quotaHistoryPath()
+	if err := quotahistory.Save(path, history); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &quotaHistoryRecorder{path: path, history: quotahistory.Load(path), backoffTo: map[string]time.Time{}}
+
+	// No credentials to read, but the sample is past retention.
+	h.sampleQuotaHistory(context.Background(), recorder, old.Add(quotahistory.Retention+time.Hour))
+
+	if saved := quotahistory.Load(path); len(saved) != 0 {
+		t.Fatalf("expired samples still saved: %v", saved)
+	}
+}

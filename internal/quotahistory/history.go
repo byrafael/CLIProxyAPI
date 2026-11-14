@@ -75,10 +75,11 @@ func (h History) Record(key, provider string, window Window, now time.Time) bool
 		h[key] = &Series{Provider: provider, PeriodHours: window.PeriodHours, Points: []Point{point}}
 		changed = true
 	}
-	return h.prune(now) || changed
+	return h.Prune(now) || changed
 }
 
-func (h History) prune(now time.Time) bool {
+// Prune drops samples older than the retention window and reports whether anything changed.
+func (h History) Prune(now time.Time) bool {
 	cutoff := now.Add(-Retention)
 	changed := false
 	for key, series := range h {

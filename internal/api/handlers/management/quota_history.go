@@ -134,11 +134,15 @@ func (h *Handler) sampleQuotaHistory(ctx context.Context, recorder *quotaHistory
 		}
 		recorder.mu.Unlock()
 	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	// Expire old samples even when no credential could be read this cycle.
+	if recorder.history.Prune(now) {
+		changed = true
+	}
 	if !changed {
 		return
 	}
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
 	if err := quotahistory.Save(recorder.path, recorder.history); err != nil {
 		log.Warnf("quota history: save %s: %v", recorder.path, err)
 	}
