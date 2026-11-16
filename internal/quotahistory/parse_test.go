@@ -71,9 +71,27 @@ func TestClaudeReadsTheScopedFableLimit(t *testing.T) {
 	if first["fable"].Remaining != 70 {
 		t.Fatalf("first fable = %+v", first)
 	}
-	// A scoped limit with no percentage or reset is not usable.
+	// A scoped limit with no percentage is not a candidate at all.
 	if got := ClaudeWindows([]byte(`{"limits":[{"kind":"weekly_scoped","resets_at":"2026-11-17T10:00:00Z","scope":{"model":{"display_name":"Fable"}}}]}`)); len(got) != 0 {
-		t.Fatalf("unusable fable recorded: %+v", got)
+		t.Fatalf("percent-less fable recorded: %+v", got)
+	}
+}
+
+func TestClaudeChoosesTheFableCandidateBeforeCheckingItsReset(t *testing.T) {
+	// Like the panel: the active candidate is chosen first. Its missing reset drops
+	// Fable altogether; it does not fall through to the other candidate or the legacy percentage.
+	body := `{"iguana_necktie":{"utilization":42,"resets_at":"2026-11-17T09:00:00Z"},
+	  "limits":[
+	    {"kind":"weekly_scoped","percent":10,"resets_at":"2026-11-18T09:00:00Z","scope":{"model":{"display_name":"Fable"}}},
+	    {"kind":"weekly_scoped","percent":64,"is_active":true,"scope":{"model":{"display_name":"Fable"}}}]}`
+	if got := ClaudeWindows([]byte(body)); len(got) != 0 {
+		t.Fatalf("fable recorded from a rejected candidate: %+v", got)
+	}
+	// A candidate that is not active still wins over the legacy percentage when it is the first.
+	only := `{"iguana_necktie":{"utilization":42,"resets_at":"2026-11-17T09:00:00Z"},
+	  "limits":[{"kind":"weekly_scoped","percent":64,"scope":{"model":{"display_name":"Fable"}}}]}`
+	if got := ClaudeWindows([]byte(only)); len(got) != 0 {
+		t.Fatalf("legacy fable recorded beside a scoped candidate without a reset: %+v", got)
 	}
 }
 

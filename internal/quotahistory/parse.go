@@ -58,8 +58,8 @@ func ClaudeWindows(body []byte) []Window {
 		}
 		return &Window{Name: name, Remaining: clampPct(100 - used), ResetsAt: resets, PeriodHours: periodHours}
 	}
-	fable := claudeScopedFable(payload["limits"])
-	if fable == nil && !claudeCreditPool(payload["iguana_necktie"]) {
+	fable, scoped := claudeScopedFable(payload["limits"])
+	if !scoped && !claudeCreditPool(payload["iguana_necktie"]) {
 		fable = read("iguana_necktie", "fable", 24*7)
 	}
 	return limits{
@@ -69,9 +69,12 @@ func ClaudeWindows(body []byte) []Window {
 	}.all()
 }
 
-// claudeScopedFable is the panel's findFableUsageLimit: a weekly_scoped limit for the
-// Fable model, the active one when several exist.
-func claudeScopedFable(raw json.RawMessage) *Window {
+// claudeScopedFable follows the panel's findFableUsageLimit and the normalization after
+// it. Candidates are weekly_scoped limits for the Fable model that carry a percentage;
+// the active one wins, else the first. The choice is made before the reset is checked,
+// so scoped reports whether a candidate exists (it then replaces the legacy percentage)
+// and the window is nil when that candidate has no usable reset.
+func claudeScopedFable(raw json.RawMessage) (window *Window, scoped bool) {
 	var entries []struct {
 		Kind     string `json:"kind"`
 		Percent  any    `json:"percent"`
@@ -84,30 +87,37 @@ func claudeScopedFable(raw json.RawMessage) *Window {
 		} `json:"scope"`
 	}
 	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
-		return nil
+		return nil, false
 	}
-	var found *Window
-	for _, entry := range entries {
+	chosen := -1
+	for i, entry := range entries {
 		if strings.ToLower(strings.TrimSpace(entry.Kind)) != "weekly_scoped" || entry.Scope == nil || entry.Scope.Model == nil {
 			continue
 		}
 		if model := strings.ToLower(strings.TrimSpace(entry.Scope.Model.DisplayName)); model != "fable" && model != "fable 5" {
 			continue
 		}
-		used, okUsed := number(entry.Percent)
-		resets, okReset := instant(entry.ResetsAt)
-		if !okUsed || !okReset {
+		if _, ok := number(entry.Percent); !ok {
 			continue
 		}
-		window := &Window{Name: "fable", Remaining: clampPct(100 - used), ResetsAt: resets, PeriodHours: 24 * 7}
 		if active, _ := entry.Active.(bool); active {
-			return window
+			chosen = i
+			break
 		}
-		if found == nil {
-			found = window
+		if chosen < 0 {
+			chosen = i
 		}
 	}
-	return found
+	if chosen < 0 {
+		return nil, false
+	}
+	entry := entries[chosen]
+	used, _ := number(entry.Percent)
+	resets, ok := instant(entry.ResetsAt)
+	if !ok {
+		return nil, true
+	}
+	return &Window{Name: "fable", Remaining: clampPct(100 - used), ResetsAt: resets, PeriodHours: 24 * 7}, true
 }
 
 // claudeCreditPool reports whether the legacy iguana_necktie window counts dollars,
