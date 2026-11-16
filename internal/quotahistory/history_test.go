@@ -9,7 +9,7 @@ import (
 
 // panelFixture is the output of the panel's serializeHistory (forecast/history.ts)
 // for two series. The panel and the proxy must read each other's format.
-const panelFixture = `{"version":1,"series":{"codex-a.json#weekly":{"p":"codex","h":168,"d":[[29000000,81.3,29005000],[29000060,80,29005000]]},"claude-b.json#session":{"p":"claude","h":5,"d":[[29000010,42.5,29000200]]}}}`
+const panelFixture = `{"version":1,"series":{"codex-a.json#weekly":{"p":"codex","h":168,"d":[[29000000,81.3,29005000],[29000060,80,29005000]]},"claude-b.json#session":{"p":"claude","h":5,"d":[[29000010,42.5,29000200]]},"claude-b.json#fable":{"p":"claude","h":168,"d":[[29000020,36,29000300]]}}}`
 
 func minutes(n int64) time.Time { return time.UnixMilli(n * time.Minute.Milliseconds()) }
 
@@ -110,7 +110,7 @@ func TestSaveAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := Load(path)
-	if len(got) != 2 || len(got["codex-a.json#weekly"].Points) != 2 {
+	if len(got) != 3 || len(got["codex-a.json#weekly"].Points) != 2 {
 		t.Fatalf("loaded %+v", got)
 	}
 }

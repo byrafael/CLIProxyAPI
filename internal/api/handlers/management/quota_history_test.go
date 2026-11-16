@@ -75,7 +75,7 @@ func TestSampleQuotaHistoryRecordsAndPersists(t *testing.T) {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			_, _ = w.Write([]byte(`{"five_hour":{"utilization":10,"resets_at":"2026-11-14T10:00:00Z"},"seven_day":{"utilization":25,"resets_at":"2026-11-17T09:00:00Z"}}`))
+			_, _ = w.Write([]byte(`{"five_hour":{"utilization":10,"resets_at":"2026-11-14T10:00:00Z"},"seven_day":{"utilization":25,"resets_at":"2026-11-17T09:00:00Z"},"limits":[{"kind":"weekly_scoped","percent":64,"resets_at":"2026-11-17T10:00:00Z","is_active":true,"scope":{"model":{"display_name":"Fable"}}}]}`))
 		case "/codex":
 			codexCalls++
 			if r.Header.Get("Chatgpt-Account-Id") != "acct-1" {
@@ -114,8 +114,15 @@ func TestSampleQuotaHistoryRecordsAndPersists(t *testing.T) {
 	if series == nil || len(series.Points) != 1 || series.Points[0].Remaining != 75 || series.Provider != "claude" {
 		t.Fatalf("saved claude series = %+v (all: %v)", series, saved)
 	}
-	if len(saved) != 1 {
-		t.Fatalf("saved series = %v, want only claude (codex was rate limited, disabled skipped)", saved)
+	// Every window the credential reports is recorded, not only the weekly one.
+	if session := saved["claude-a.json#session"]; session == nil || len(session.Points) != 1 || session.Points[0].Remaining != 90 || session.PeriodHours != 5 {
+		t.Fatalf("saved claude session series = %+v (all: %v)", session, saved)
+	}
+	if fable := saved["claude-a.json#fable"]; fable == nil || len(fable.Points) != 1 || fable.Points[0].Remaining != 36 || fable.PeriodHours != 168 {
+		t.Fatalf("saved claude fable series = %+v (all: %v)", fable, saved)
+	}
+	if len(saved) != 3 {
+		t.Fatalf("saved series = %v, want only claude's three (codex was rate limited, disabled skipped)", saved)
 	}
 
 	// The rate-limited credential is skipped until its backoff ends.
