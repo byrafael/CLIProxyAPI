@@ -1,5 +1,6 @@
-// Package quotahistory records each credential's primary quota window over time,
-// so the management panel can chart usage even when no browser had it open.
+// Package quotahistory records each credential's quota windows over time (5-hour,
+// weekly, and Fable where reported), so the management panel can chart usage even
+// when no browser had it open.
 //
 // The model, sampling rules, and stored format mirror the panel's
 // src/features/quota/forecast/history.ts (format version 1). The panel merges
@@ -40,12 +41,12 @@ type Series struct {
 	Points      []Point
 }
 
-// History is keyed by "<credential file name>#<weekly|session>", like the panel.
+// History is keyed by "<credential file name>#<weekly|session|fable>", like the panel.
 type History map[string]*Series
 
-// Window is the primary limit read from one usage response.
+// Window is one limit read from a usage response.
 type Window struct {
-	// Name is "weekly" or "session", the panel's PrimaryWindow.
+	// Name is "weekly", "session" or "fable", the panel's QuotaWindowId.
 	Name        string
 	Remaining   float64
 	ResetsAt    time.Time

@@ -48,8 +48,8 @@ var (
 	}
 )
 
-// quotaHistoryRecorder samples each enabled Claude and Codex OAuth credential's
-// primary quota window on a schedule and keeps 30 days of it on disk.
+// quotaHistoryRecorder samples every quota window of each enabled Claude and Codex OAuth
+// credential on a schedule and keeps 30 days of it on disk.
 type quotaHistoryRecorder struct {
 	mu        sync.Mutex
 	path      string
@@ -118,7 +118,7 @@ func (h *Handler) sampleQuotaHistory(ctx context.Context, recorder *quotaHistory
 		if now.Before(skipUntil) {
 			continue
 		}
-		window, status, err := h.readPrimaryWindow(ctx, auth, provider, now)
+		windows, status, err := h.readWindows(ctx, auth, provider, now)
 		if status == http.StatusTooManyRequests {
 			recorder.mu.Lock()
 			recorder.backoffTo[name] = now.Add(quotaHistoryBackoff)
@@ -129,8 +129,10 @@ func (h *Handler) sampleQuotaHistory(ctx context.Context, recorder *quotaHistory
 			continue
 		}
 		recorder.mu.Lock()
-		if recorder.history.Record(quotahistory.SeriesKey(name, window.Name), provider, window, now) {
-			changed = true
+		for _, window := range windows {
+			if recorder.history.Record(quotahistory.SeriesKey(name, window.Name), provider, window, now) {
+				changed = true
+			}
 		}
 		recorder.mu.Unlock()
 	}
@@ -172,13 +174,13 @@ func quotaHistoryTarget(auth *coreauth.Auth) (string, string, bool) {
 	return name, provider, true
 }
 
-func (h *Handler) readPrimaryWindow(ctx context.Context, auth *coreauth.Auth, provider string, now time.Time) (quotahistory.Window, int, error) {
+func (h *Handler) readWindows(ctx context.Context, auth *coreauth.Auth, provider string, now time.Time) ([]quotahistory.Window, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, quotaHistoryTimeout)
 	defer cancel()
 
 	token, err := h.resolveTokenForAuth(ctx, auth, "")
 	if err != nil || strings.TrimSpace(token) == "" {
-		return quotahistory.Window{}, 0, fmt.Errorf("resolve token: %w", err)
+		return nil, 0, fmt.Errorf("resolve token: %w", err)
 	}
 	url, headers := claudeUsageURL, claudeUsageHeaders
 	if provider == "codex" {
@@ -186,7 +188,7 @@ func (h *Handler) readPrimaryWindow(ctx context.Context, auth *coreauth.Auth, pr
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return quotahistory.Window{}, 0, err
+		return nil, 0, err
 	}
 	for key, value := range headers {
 		req.Header.Set(key, value)
@@ -200,28 +202,27 @@ func (h *Handler) readPrimaryWindow(ctx context.Context, auth *coreauth.Auth, pr
 
 	resp, err := (&http.Client{Transport: h.apiCallTransport(auth, "")}).Do(req)
 	if err != nil {
-		return quotahistory.Window{}, 0, err
+		return nil, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return quotahistory.Window{}, resp.StatusCode, err
+		return nil, resp.StatusCode, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return quotahistory.Window{}, resp.StatusCode, fmt.Errorf("usage returned %d", resp.StatusCode)
+		return nil, resp.StatusCode, fmt.Errorf("usage returned %d", resp.StatusCode)
 	}
 
-	var window quotahistory.Window
-	var ok bool
+	var windows []quotahistory.Window
 	if provider == "codex" {
-		window, ok = quotahistory.CodexPrimary(body, now)
+		windows = quotahistory.CodexWindows(body, now)
 	} else {
-		window, ok = quotahistory.ClaudePrimary(body)
+		windows = quotahistory.ClaudeWindows(body)
 	}
-	if !ok {
-		return quotahistory.Window{}, resp.StatusCode, fmt.Errorf("no usable window in usage response")
+	if len(windows) == 0 {
+		return nil, resp.StatusCode, fmt.Errorf("no usable window in usage response")
 	}
-	return window, resp.StatusCode, nil
+	return windows, resp.StatusCode, nil
 }
 
 // GetQuotaHistory serves the recorded history in the panel's stored format.

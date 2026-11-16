@@ -16,29 +16,32 @@ const (
 	maxMonthSeconds = 31 * 24 * 60 * 60
 )
 
-// limits holds the panel's two classified windows for one credential.
+// limits holds the panel's classified windows for one credential.
 type limits struct {
 	weekly  *Window
 	session *Window
+	fable   *Window
 }
 
-// primary is the panel's primaryLimit: the weekly limit when there is one, else the short one.
-func (l limits) primary() (Window, bool) {
-	if l.weekly != nil {
-		return *l.weekly, true
+// all lists every window the credential reports. The panel can chart each of them,
+// so each is recorded, not only its primary one.
+func (l limits) all() []Window {
+	var windows []Window
+	for _, window := range []*Window{l.weekly, l.session, l.fable} {
+		if window != nil {
+			windows = append(windows, *window)
+		}
 	}
-	if l.session != nil {
-		return *l.session, true
-	}
-	return Window{}, false
+	return windows
 }
 
-// ClaudePrimary reads an Anthropic /api/oauth/usage body. Claude names its windows,
-// so five_hour is the session window and seven_day the weekly one.
-func ClaudePrimary(body []byte) (Window, bool) {
+// ClaudeWindows reads an Anthropic /api/oauth/usage body. Claude names its windows,
+// so five_hour is the session window and seven_day the weekly one. The Fable window is
+// the weekly_scoped limit naming that model, or the legacy iguana_necktie percentage.
+func ClaudeWindows(body []byte) []Window {
 	var payload map[string]json.RawMessage
 	if json.Unmarshal(body, &payload) != nil {
-		return Window{}, false
+		return nil
 	}
 	read := func(key, name string, periodHours float64) *Window {
 		var window map[string]any
@@ -55,23 +58,94 @@ func ClaudePrimary(body []byte) (Window, bool) {
 		}
 		return &Window{Name: name, Remaining: clampPct(100 - used), ResetsAt: resets, PeriodHours: periodHours}
 	}
+	fable, scoped := claudeScopedFable(payload["limits"])
+	if !scoped && !claudeCreditPool(payload["iguana_necktie"]) {
+		fable = read("iguana_necktie", "fable", 24*7)
+	}
 	return limits{
 		weekly:  read("seven_day", "weekly", 24*7),
 		session: read("five_hour", "session", 5),
-	}.primary()
+		fable:   fable,
+	}.all()
 }
 
-// CodexPrimary reads a ChatGPT /backend-api/wham/usage body, following the panel's
+// claudeScopedFable follows the panel's findFableUsageLimit and the normalization after
+// it. Candidates are weekly_scoped limits for the Fable model that carry a percentage;
+// the active one wins, else the first. The choice is made before the reset is checked,
+// so scoped reports whether a candidate exists (it then replaces the legacy percentage)
+// and the window is nil when that candidate has no usable reset.
+func claudeScopedFable(raw json.RawMessage) (window *Window, scoped bool) {
+	var entries []struct {
+		Kind     string `json:"kind"`
+		Percent  any    `json:"percent"`
+		ResetsAt any    `json:"resets_at"`
+		Active   any    `json:"is_active"`
+		Scope    *struct {
+			Model *struct {
+				DisplayName string `json:"display_name"`
+			} `json:"model"`
+		} `json:"scope"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
+		return nil, false
+	}
+	chosen := -1
+	for i, entry := range entries {
+		if strings.ToLower(strings.TrimSpace(entry.Kind)) != "weekly_scoped" || entry.Scope == nil || entry.Scope.Model == nil {
+			continue
+		}
+		if model := strings.ToLower(strings.TrimSpace(entry.Scope.Model.DisplayName)); model != "fable" && model != "fable 5" {
+			continue
+		}
+		if _, ok := number(entry.Percent); !ok {
+			continue
+		}
+		if active, _ := entry.Active.(bool); active {
+			chosen = i
+			break
+		}
+		if chosen < 0 {
+			chosen = i
+		}
+	}
+	if chosen < 0 {
+		return nil, false
+	}
+	entry := entries[chosen]
+	used, _ := number(entry.Percent)
+	resets, ok := instant(entry.ResetsAt)
+	if !ok {
+		return nil, true
+	}
+	return &Window{Name: "fable", Remaining: clampPct(100 - used), ResetsAt: resets, PeriodHours: 24 * 7}, true
+}
+
+// claudeCreditPool reports whether the legacy iguana_necktie window counts dollars,
+// which the panel shows as cloud session credits rather than Fable.
+func claudeCreditPool(raw json.RawMessage) bool {
+	var window map[string]any
+	if json.Unmarshal(raw, &window) != nil {
+		return false
+	}
+	for _, key := range []string{"limit_dollars", "used_dollars", "remaining_dollars"} {
+		if _, ok := number(window[key]); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// CodexWindows reads a ChatGPT /backend-api/wham/usage body, following the panel's
 // codex window classification: windows are matched by length, monthly windows never
 // count as weekly, and legacy payloads fall back to primary/secondary order.
-func CodexPrimary(body []byte, now time.Time) (Window, bool) {
+func CodexWindows(body []byte, now time.Time) []Window {
 	var payload map[string]any
 	if json.Unmarshal(body, &payload) != nil {
-		return Window{}, false
+		return nil
 	}
 	rateLimit, _ := pick(payload, "rate_limit", "rateLimit").(map[string]any)
 	if rateLimit == nil {
-		return Window{}, false
+		return nil
 	}
 	primaryRaw, _ := pick(rateLimit, "primary_window", "primaryWindow").(map[string]any)
 	secondaryRaw, _ := pick(rateLimit, "secondary_window", "secondaryWindow").(map[string]any)
@@ -140,7 +214,7 @@ func CodexPrimary(body []byte, now time.Time) (Window, bool) {
 	if !isMonthly(weekly) {
 		result.weekly = read(weekly, "weekly", 24*7)
 	}
-	return result.primary()
+	return result.all()
 }
 
 func pick(m map[string]any, keys ...string) any {
